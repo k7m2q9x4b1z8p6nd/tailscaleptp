@@ -12,7 +12,6 @@
 #include <dwmapi.h>
 #include <commdlg.h>
 #include <objbase.h>
-#include <wininet.h>
 #include <atomic>
 #include <deque>
 #include <exception>
@@ -42,7 +41,6 @@
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "comdlg32.lib")
 #pragma comment(lib, "comctl32.lib")
-#pragma comment(lib, "wininet.lib")
 
 constexpr int kPort = 45779;
 constexpr size_t kChunk = 256 * 1024;
@@ -477,47 +475,16 @@ static void refreshPeers() {
 
 static void refreshPeersAsync() { std::thread(refreshPeers).detach(); }
 
-struct SInet {
-    HINTERNET v;
-    ~SInet() { if (v) InternetCloseHandle(v); }
-};
-
-static HINTERNET httpOpen(const wchar_t* url) {
-    HINTERNET inet = InternetOpenW(L"Taildrop", INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, 0);
-    if (!inet) throw std::runtime_error("inet");
-    HINTERNET h = InternetOpenUrlW(inet, url, nullptr, 0,
-                                   INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE |
-                                       INTERNET_FLAG_NO_COOKIES | INTERNET_FLAG_SECURE,
-                                   0);
-    InternetCloseHandle(inet);
-    if (!h) throw std::runtime_error("openurl");
-    return h;
-}
-
 static std::string httpGet(const wchar_t* url) {
-    SInet h{httpOpen(url)};
-    std::string out;
-    char buf[65536];
-    DWORD n;
-    while (InternetReadFile(h.v, buf, sizeof(buf), &n) && n) out.append(buf, n);
-    return out;
+    std::wstring cmd = L"curl.exe -fsSL --max-time 20 \"" + std::wstring(url) + L"\"";
+    return captureOutput(cmd.c_str());
 }
 
 static void httpDownload(const wchar_t* url, const std::wstring& path) {
-    SInet h{httpOpen(url)};
-    HANDLE f = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
-                           FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (!f || f == INVALID_HANDLE_VALUE) throw std::runtime_error("create");
-    UniqueHandle fh(f);
-    char buf[65536];
-    DWORD n;
-    while (InternetReadFile(h.v, buf, sizeof(buf), &n) && n) {
-        DWORD w;
-        if (!WriteFile(f, buf, n, &w, nullptr) || w != n) throw std::runtime_error("write");
-    }
-    fh.reset();
-    if (GetFileSize(f, nullptr) == 0 && GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES)
-        throw std::runtime_error("empty");
+    std::wstring cmd = L"curl.exe -fsSL --max-time 60 -o \"" + path + L"\" \"" + url + L"\"";
+    captureOutput(cmd.c_str());
+    if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES)
+        throw std::runtime_error("download failed");
 }
 
 static std::vector<int> verParts(std::string s) {
